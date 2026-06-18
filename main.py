@@ -17,79 +17,63 @@ app.add_middleware(
 
 @app.get("/")
 def home():
-    return {"message": "Grid-Reconstruction Vector Cleaner is Natively Running!"}
+    return {"message": "Grid-Clone Masterclass PDF Cleaner is Running!"}
 
 @app.post("/remove-watermark/")
 async def remove_watermark(file: UploadFile = File(...)):
     pdf_bytes = await file.read()
     
-    # Open the PDF natively as a pure vector document
+    # Open PDF natively as a pure vector document
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     
+    # STEP 1: Deep Core Stream Wiping (Removes text codes directly from the binary layer)
+    for x in range(1, doc.xref_length()):
+        try:
+            stream = doc.xref_stream(x)
+            if stream and (b"NotebookLM" in stream or b"4e6f7465626f6f6b4c4d" in stream or b"4E6F7465626F6F6B4C4D" in stream):
+                stream = stream.replace(b"NotebookLM", b"          ")
+                stream = stream.replace(b"4e6f7465626f6f6b4c4d", b"20202020202020202020")
+                stream = stream.replace(b"4E6F7465626F6F6B4C4D", b"20202020202020202020")
+                doc.update_stream(x, stream)
+        except:
+            pass
+
+    # STEP 2: Page-Level Surgical Verification & Grid Clone Stamping
     for page in doc:
-        p_width = page.rect.x1
-        p_height = page.rect.y1
+        page.clean_contents()
         
-        # Define the exact bounding box around the bottom-right watermark zone
-        target_rect = fitz.Rect(p_width - 165, p_height - 42, p_width - 10, p_height - 5)
+        # Look for any remaining layout traces of the watermark
+        text_instances = page.search_for("NotebookLM")
         
-        # 1. DYNAMIC BACKGROUND COLOR SAMPLING
-        # Sample a 1x1 pixel slightly outside the zone to capture the exact underlying page theme color
-        sample_rect = fitz.Rect(p_width - 170, p_height - 50, p_width - 169, p_height - 49)
-        pix = page.get_pixmap(clip=sample_rect, dpi=10)
-        
-        if pix and len(pix.samples) >= 3:
-            bg_color = (pix.samples[0] / 255.0, pix.samples[1] / 255.0, pix.samples[2] / 255.0)
+        if text_instances:
+            for rect in text_instances:
+                # Calculate the exact height of the watermark box
+                h_diff = rect.y1 - rect.y0
+                
+                # Dynamic Clone Source: Target the exact clean grid section right above the watermark
+                # Shifting up vertically ensures the grid lines line up mathematically and perfectly
+                source_rect = fitz.Rect(rect.x0, rect.y0 - h_diff - 12, rect.x1, rect.y0 - 12)
+                
+                # Capture the pristine background grid texture at ultra-high 450 DPI
+                pix = page.get_pixmap(clip=source_rect, dpi=450)
+                grid_bytes = pix.tobytes("png")
+                
+                # Stamp the clean grid texture exactly over the dirty watermark text area
+                # This obliterates the text and naturally leaves the grid running through flawlessly
+                page.insert_image(rect, stream=grid_bytes)
         else:
-            bg_color = (1.0, 1.0, 1.0)  # Fallback to absolute white if sampling fails
+            # Absolute Fallback: Target the corner zone if font dictionary metadata is hidden
+            p_width = page.rect.x1
+            p_height = page.rect.y1
+            fallback_rect = fitz.Rect(p_width - 150, p_height - 42, p_width - 15, p_height - 10)
             
-        # 2. ADVANCED VECTOR GRID LINE DETECTION
-        vertical_xs = set()
-        horizontal_ys = set()
-        grid_color = (0.85, 0.85, 0.85)  # Default light gray fallback
-        grid_width = 0.5
-        
-        drawings = page.get_drawings()
-        for draw in drawings:
-            stroke_color = draw.get("color", None)
-            w = draw.get("width", 0.5)
+            # Clone clean grid texture from 45 points above the fallback zone
+            source_rect = fitz.Rect(p_width - 150, p_height - 87, p_width - 15, p_height - 55)
+            pix = page.get_pixmap(clip=source_rect, dpi=450)
+            grid_bytes = pix.tobytes("png")
             
-            for item in draw.get("items", []):
-                if item[0] == "l":  # Identify pure native straight line vectors
-                    p1, p2 = item[1], item[2]
-                    
-                    # Track vertical grid lines that intersect the watermark box coordinates
-                    if abs(p1.x - p2.x) < 0.1:
-                        if min(p1.y, p2.y) < target_rect.y0 and max(p1.y, p2.y) > target_rect.y1:
-                            vertical_xs.add(p1.x)
-                            if stroke_color:
-                                grid_color = stroke_color
-                                grid_width = w
-                                
-                    # Track horizontal grid lines that intersect the watermark box coordinates
-                    elif abs(p1.y - p2.y) < 0.1:
-                        if min(p1.x, p2.x) < target_rect.x0 and max(p1.x, p2.x) > target_rect.x1:
-                            horizontal_ys.add(p1.y)
-                            if stroke_color:
-                                grid_color = stroke_color
-                                grid_width = w
-                                
-        # 3. SEAMLESS RECONSTRUCTION OVERLAY
-        # Conceal the text layer completely using a solid vector block matching the background theme
-        page.draw_rect(target_rect, color=bg_color, fill=bg_color, overlay=True)
-        
-        # Redraw the missing vertical grid lines perfectly across the concealed block
-        for x in vertical_xs:
-            if target_rect.x0 <= x <= target_rect.x1:
-                page.draw_line(fitz.Point(x, target_rect.y0), fitz.Point(x, target_rect.y1), 
-                               color=grid_color, width=grid_width, overlay=True)
-                
-        # Redraw the missing horizontal grid lines perfectly across the concealed block
-        for y in horizontal_ys:
-            if target_rect.y0 <= y <= target_rect.y1:
-                page.draw_line(fitz.Point(target_rect.x0, y), fitz.Point(target_rect.x1, y), 
-                               color=grid_color, width=grid_width, overlay=True)
-                
+            page.insert_image(fallback_rect, stream=grid_bytes)
+            
     output_stream = io.BytesIO()
     doc.save(output_stream, garbage=4, deflate=True)
     doc.close()
@@ -101,5 +85,5 @@ async def remove_watermark(file: UploadFile = File(...)):
         output_stream, 
         media_type="application/pdf",
         headers={"Content-Disposition": "attachment; filename=cleaned_document.pdf"}
-                                )
-    
+                )
+            
