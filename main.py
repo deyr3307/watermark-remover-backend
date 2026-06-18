@@ -19,7 +19,7 @@ app.add_middleware(
 
 @app.get("/")
 def home():
-    return {"message": "Optimized Backend is Running!"}
+    return {"message": "High-Power Pixel-Level Watermark Remover is Ready!"}
 
 @app.post("/remove-watermark/")
 async def remove_watermark(file: UploadFile = File(...)):
@@ -32,15 +32,11 @@ async def remove_watermark(file: UploadFile = File(...)):
         page = input_pdf[page_num]
         text_instances = page.search_for("NotebookLM")
         
-        # Lowered DPI to 100 to prevent Render 512MB RAM Crash
-        pix = page.get_pixmap(dpi=100)
-        img_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+        # Render page to image bytes safely using PNG
+        pix = page.get_pixmap(dpi=120)
+        img_bytes = pix.tobytes("png")
+        img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
         
-        if pix.n == 4:
-            img = cv2.cvtColor(img_np, cv2.COLOR_RGBA2BGR)
-        else:
-            img = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-            
         h, w = img.shape[:2]
         mask = np.zeros((h, w), dtype=np.uint8)
         
@@ -49,26 +45,49 @@ async def remove_watermark(file: UploadFile = File(...)):
         
         if text_instances:
             for rect in text_instances:
-                x0 = max(0, int(rect.x0 * zoom_x) - 3)
-                y0 = max(0, int(rect.y0 * zoom_y) - 3)
-                x1 = min(w, int(rect.x1 * zoom_x) + 3)
-                y1 = min(h, int(rect.y1 * zoom_y) + 3)
-                cv2.rectangle(mask, (x0, y0), (x1, y1), 255, -1)
+                # Get coordinates with a tiny 2px safety padding
+                x0 = max(0, int(rect.x0 * zoom_x) - 2)
+                y0 = max(0, int(rect.y0 * zoom_y) - 2)
+                x1 = min(w, int(rect.x1 * zoom_x) + 2)
+                y1 = min(h, int(rect.y1 * zoom_y) + 2)
+                
+                # High-Power Step: Extract ONLY the dark text strokes, preserve the grid lines
+                crop = img[y0:y1, x0:x1]
+                if crop.size > 0:
+                    gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                    # Isolate dark text color vectors from the light blueprint grid
+                    _, thresh_crop = cv2.threshold(gray_crop, 135, 255, cv2.THRESH_BINARY_INV)
+                    
+                    # Smoothly dilate by 1px to ensure no text ghosting remains
+                    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+                    thresh_crop = cv2.dilate(thresh_crop, kernel, iterations=1)
+                    
+                    # Merge into the global mask array
+                    mask[y0:y1, x0:x1] = cv2.bitwise_or(mask[y0:y1, x0:x1], thresh_crop)
         else:
-            # Safe boundary fallback for the corner
-            cv2.rectangle(mask, (int(w - 150), int(h - 40)), (w, h), 255, -1)
-            
+            # High-Power Fallback: Target the corner zone if the PDF layer is flat
+            x0, y0, x1, y1 = int(w - 160), int(h - 50), w, h
+            crop = img[y0:y1, x0:x1]
+            if crop.size > 0:
+                gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                _, thresh_crop = cv2.threshold(gray_crop, 135, 255, cv2.THRESH_BINARY_INV)
+                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+                thresh_crop = cv2.dilate(thresh_crop, kernel, iterations=1)
+                mask[y0:y1, x0:x1] = thresh_crop
+                
+        # Inpaint exactly on the micro-level letter tracks with a tight radius (3)
+        # This keeps the background grid vectors running perfectly through the letters
         cleaned_img = cv2.inpaint(img, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
         
-        _, img_encoded = cv2.imencode('.jpg', cleaned_img, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+        # Encode back to PDF layer structure with premium compression
+        _, img_encoded = cv2.imencode('.jpg', cleaned_img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
         img_pdf_bytes = fitz.image_to_pdf(img_encoded.tobytes())
         
         img_pdf = fitz.open("pdf", img_pdf_bytes)
         output_pdf.insert_pdf(img_pdf)
         
-        # Explicit memory cleanup per page
         img_pdf.close()
-        del img_np, img, mask, cleaned_img
+        del img, mask, cleaned_img
         
     input_pdf.close()
     
@@ -77,12 +96,11 @@ async def remove_watermark(file: UploadFile = File(...)):
     output_pdf.close()
     output_stream.seek(0)
     
-    # Force Python garbage collection to free memory immediately
     gc.collect()
     
     return StreamingResponse(
         output_stream, 
         media_type="application/pdf",
         headers={"Content-Disposition": "attachment; filename=cleaned_document.pdf"}
-    )
+                    )
     
